@@ -189,9 +189,17 @@ export default async function TestDetallePage({
           <Card>
             <Subtitulo>Informe — tu aprobación decide</Subtitulo>
             {aplicacion.estado === "aprobado" ? (
-              <pre className="mt-3 whitespace-pre-wrap font-sans text-sm text-ink/90">
-                {aplicacion.interpretacion_aprobada}
-              </pre>
+              <>
+                <Link
+                  href={`/panel/tests/${id}/informe`}
+                  className="mt-3 inline-block rounded-lg bg-primary px-4 py-2 text-sm font-medium text-white hover:bg-primary-light"
+                >
+                  Ver informe formal (PDF) →
+                </Link>
+                <pre className="mt-3 whitespace-pre-wrap font-sans text-sm text-ink/90">
+                  {aplicacion.interpretacion_aprobada}
+                </pre>
+              </>
             ) : aplicacion.interpretacion_borrador ? (
               <div className="mt-3 space-y-4">
                 <form action={aprobarConId} className="space-y-3">

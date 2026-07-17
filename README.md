@@ -1,4 +1,4 @@
-# psicologia.cl — Plataforma clínica con IA para psicólogos
+# sicologia.app — Plataforma clínica con IA para psicólogos
 
 Plataforma exclusiva para psicólogos (Chile, proyección internacional) que elimina el trabajo manual post-consulta: resumen de sesiones con IA, tests psicométricos con corrección automática, intranet del paciente y gestión financiera.
 
@@ -23,6 +23,8 @@ Plataforma exclusiva para psicólogos (Chile, proyección internacional) que eli
 | M4 — Finanzas: cobro automático al marcar cita realizada, registro de pagos, resumen mensual | ✅ funcional (Fintoc pendiente) |
 | M5 — Intranet paciente: próxima sesión + link Meet, responder tests, tareas, check-in de ánimo, creación de acceso desde la ficha | ✅ funcional |
 | Configuración: BYOK por proveedor, modelo por tarea, retención de audio (Ley 21.719) | ✅ funcional |
+| Informe formal imprimible/PDF con membrete y **firma digital** del profesional (reunión 17-jul) | ✅ funcional |
+| Alertas de ánimo bajo en el dashboard + tutorial de integración Google (`/panel/ayuda/google`) | ✅ funcional |
 | Integraciones Google Calendar/Meet, Gemini STT, Fintoc, WhatsApp, Stripe | 🔜 siguientes pasos |
 | M3 — Biblioteca de baremos por tenant (tests licenciados) | 🔜 Fase 1.5 (esquema de BD ya listo) |
 

@@ -22,6 +22,8 @@ export interface Profesional {
   api_keys_cifradas: Record<string, string>;
   config_ia: ConfigIAProfesional;
   config_retencion_audio: { eliminar_audio_al_aprobar?: boolean };
+  firma_data: string | null;
+  membrete_texto: string | null;
 }
 
 /** Tenant del usuario autenticado; lanza si no hay sesión de profesional. */

@@ -18,7 +18,7 @@ export default function PanelLayout({
 }) {
   return (
     <div className="flex min-h-screen">
-      <aside className="hidden w-56 shrink-0 flex-col border-r border-border bg-surface md:flex">
+      <aside className="hidden w-56 shrink-0 flex-col border-r border-border bg-surface md:flex print:!hidden">
         <div className="border-b border-border p-5">
           <Link href="/panel" className="text-lg font-semibold text-primary">
             {APP_NAME}
@@ -43,7 +43,7 @@ export default function PanelLayout({
         </form>
       </aside>
       <div className="flex-1">
-        <header className="flex items-center justify-between border-b border-border bg-surface px-6 py-3 md:hidden">
+        <header className="flex items-center justify-between border-b border-border bg-surface px-6 py-3 md:hidden print:!hidden">
           <Link href="/panel" className="font-semibold text-primary">
             {APP_NAME}
           </Link>

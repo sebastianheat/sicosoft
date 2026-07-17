@@ -55,6 +55,31 @@ export async function guardarConfigIA(formData: FormData) {
   revalidatePath("/panel/configuracion");
 }
 
+/**
+ * Firma digital (reunión 17-jul): imagen que se estampa en los
+ * informes aprobados, para no imprimir documentos solo para firmarlos.
+ */
+export async function guardarFirma(formData: FormData) {
+  const profesional = await getProfesional();
+  const archivo = formData.get("firma") as File | null;
+  if (!archivo || archivo.size === 0) throw new Error("Sube una imagen de tu firma");
+  if (archivo.size > 500 * 1024) throw new Error("La imagen no puede superar 500 KB");
+  if (!archivo.type.startsWith("image/")) throw new Error("El archivo debe ser una imagen");
+
+  const buffer = Buffer.from(await archivo.arrayBuffer());
+  const dataUrl = `data:${archivo.type};base64,${buffer.toString("base64")}`;
+  await sql`
+    update profesionales set firma_data = ${dataUrl} where id = ${profesional.id}
+  `;
+  revalidatePath("/panel/configuracion");
+}
+
+export async function eliminarFirma() {
+  const profesional = await getProfesional();
+  await sql`update profesionales set firma_data = null where id = ${profesional.id}`;
+  revalidatePath("/panel/configuracion");
+}
+
 export async function actualizarPerfil(formData: FormData) {
   const profesional = await getProfesional();
   await sql`
@@ -62,7 +87,8 @@ export async function actualizarPerfil(formData: FormData) {
       nombre = ${String(formData.get("nombre") ?? profesional.nombre)},
       rut = ${String(formData.get("rut") ?? "") || null},
       n_registro = ${String(formData.get("n_registro") ?? "") || null},
-      especialidad = ${String(formData.get("especialidad") ?? "") || null}
+      especialidad = ${String(formData.get("especialidad") ?? "") || null},
+      membrete_texto = ${String(formData.get("membrete_texto") ?? "") || null}
     where id = ${profesional.id}
   `;
   revalidatePath("/panel/configuracion");

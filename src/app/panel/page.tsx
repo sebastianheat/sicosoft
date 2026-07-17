@@ -8,7 +8,7 @@ export const dynamic = "force-dynamic";
 export default async function DashboardPage() {
   const profesional = await getProfesional();
 
-  const [citas, borradores, pagosPendientes] = await Promise.all([
+  const [citas, borradores, pagosPendientes, animosBajos] = await Promise.all([
     sql<
       {
         id: string;
@@ -44,6 +44,26 @@ export default async function DashboardPage() {
       where p.profesional_id = ${profesional.id}
         and pg.estado in ('pendiente', 'parcial')
     `,
+    // Reunión 17-jul: alerta temprana de ánimo bajo desde los check-ins
+    // del portal. La IA no responde al paciente: notifica al profesional.
+    sql<
+      {
+        paciente_id: string;
+        paciente_nombre: string;
+        fecha: string;
+        valor: number;
+        nota: string | null;
+      }[]
+    >`
+      select ca.paciente_id, p.nombre as paciente_nombre, ca.fecha, ca.valor, ca.nota
+      from checkins_animo ca
+      join pacientes p on p.id = ca.paciente_id
+      where p.profesional_id = ${profesional.id}
+        and ca.valor <= 2
+        and ca.fecha >= current_date - 7
+      order by ca.fecha desc
+      limit 10
+    `,
   ]);
 
   const totalPendiente = pagosPendientes.reduce((acc, p) => acc + p.monto, 0);
@@ -56,6 +76,39 @@ export default async function DashboardPage() {
           Tu semana de un vistazo. La IA propone, tú decides.
         </p>
       </div>
+
+      {animosBajos.length > 0 && (
+        <Card className="border-warning/50 bg-warning/5">
+          <Subtitulo>⚠ Alertas de ánimo bajo (últimos 7 días)</Subtitulo>
+          <ul className="mt-3 space-y-2">
+            {animosBajos.map((a) => (
+              <li
+                key={`${a.paciente_id}-${a.fecha}`}
+                className="flex items-center justify-between gap-3 text-sm"
+              >
+                <div>
+                  <Link
+                    href={`/panel/pacientes/${a.paciente_id}`}
+                    className="font-medium text-primary hover:underline"
+                  >
+                    {a.paciente_nombre}
+                  </Link>
+                  <span className="text-ink/50">
+                    {" "}
+                    · {new Date(a.fecha + "T12:00:00").toLocaleDateString("es-CL")}
+                    {a.nota ? ` · "${a.nota}"` : ""}
+                  </span>
+                </div>
+                <Badge nivel="warning">ánimo {a.valor}/5</Badge>
+              </li>
+            ))}
+          </ul>
+          <p className="mt-3 text-xs text-ink/50">
+            El sistema nunca responde clínicamente al paciente: la alerta es
+            para que tú decidas el contacto.
+          </p>
+        </Card>
+      )}
 
       <div className="grid gap-6 md:grid-cols-2">
         <Card>

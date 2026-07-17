@@ -1,9 +1,12 @@
+import Link from "next/link";
 import { getProfesional } from "@/lib/actions/helpers";
 import {
   actualizarPerfil,
   eliminarApiKey,
+  eliminarFirma,
   guardarApiKey,
   guardarConfigIA,
+  guardarFirma,
 } from "@/lib/actions/configuracion";
 import {
   Badge,
@@ -66,8 +69,51 @@ export default async function ConfiguracionPage() {
                 className={inputClase}
               />
             </Campo>
+            <Campo label="Membrete de informes (encabezado personalizado)">
+              <textarea
+                name="membrete_texto"
+                rows={2}
+                defaultValue={profesional.membrete_texto ?? ""}
+                placeholder="Ej: Consulta Psicológica — Av. Providencia 123, Santiago"
+                className={inputClase}
+              />
+            </Campo>
             <BotonPrimario type="submit">Guardar perfil</BotonPrimario>
           </form>
+        </Card>
+
+        <Card>
+          <Subtitulo>Firma digital</Subtitulo>
+          <p className="mt-1 text-xs text-ink/50">
+            Sube una foto de tu firma: se estampa automáticamente en los
+            informes aprobados, sin necesidad de imprimir para firmar.
+          </p>
+          {profesional.firma_data ? (
+            <div className="mt-3 space-y-3">
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              <img
+                src={profesional.firma_data}
+                alt="Firma del profesional"
+                className="max-h-24 rounded-lg border border-border bg-white p-2"
+              />
+              <form action={eliminarFirma}>
+                <button className="text-sm text-danger hover:underline">
+                  Eliminar firma
+                </button>
+              </form>
+            </div>
+          ) : (
+            <form action={guardarFirma} className="mt-3 space-y-3">
+              <input
+                type="file"
+                name="firma"
+                accept="image/*"
+                required
+                className="block w-full text-sm text-ink/70 file:mr-3 file:rounded-lg file:border-0 file:bg-primary file:px-4 file:py-2 file:text-sm file:font-medium file:text-white hover:file:bg-primary-light"
+              />
+              <BotonPrimario type="submit">Guardar firma</BotonPrimario>
+            </form>
+          )}
         </Card>
 
         <Card>
@@ -184,6 +230,11 @@ export default async function ConfiguracionPage() {
 
         <Card>
           <Subtitulo>Integraciones</Subtitulo>
+          <p className="mt-1 text-xs">
+            <Link href="/panel/ayuda/google" className="text-primary hover:underline">
+              📖 Tutorial: configura Google para grabar tus sesiones →
+            </Link>
+          </p>
           <ul className="mt-3 space-y-2 text-sm">
             {[
               ["Google Calendar + Meet", "Agenda sincronizada y link de Meet automático"],
