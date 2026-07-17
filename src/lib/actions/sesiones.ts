@@ -2,8 +2,14 @@
 
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
-import { supabaseServer } from "@/lib/supabase/server";
-import { auditarIA, getProfesional, providerParaTarea } from "./helpers";
+import { sql } from "@/lib/db";
+import {
+  auditarIA,
+  getProfesional,
+  providerParaTarea,
+  verificarCitaDelTenant,
+  verificarSesionDelTenant,
+} from "./helpers";
 import {
   promptCorreccion,
   promptResumenSesion,
@@ -12,33 +18,28 @@ import {
 
 /** Crea (si no existe) la sesión asociada a una cita y navega a ella. */
 export async function abrirSesion(citaId: string) {
-  await getProfesional();
-  const supabase = await supabaseServer();
-  const { data: existente } = await supabase
-    .from("sesiones")
-    .select("id")
-    .eq("cita_id", citaId)
-    .maybeSingle();
-  if (existente) redirect(`/panel/sesiones/${existente.id}`);
+  const profesional = await getProfesional();
+  await verificarCitaDelTenant(citaId, profesional.id);
 
-  const { data, error } = await supabase
-    .from("sesiones")
-    .insert({ cita_id: citaId })
-    .select("id")
-    .single();
-  if (error || !data) throw new Error(error?.message ?? "Error al crear sesión");
-  redirect(`/panel/sesiones/${data.id}`);
+  const existente = await sql<{ id: string }[]>`
+    select id from sesiones where cita_id = ${citaId}
+  `;
+  if (existente.length) redirect(`/panel/sesiones/${existente[0].id}`);
+
+  const [sesion] = await sql<{ id: string }[]>`
+    insert into sesiones (cita_id) values (${citaId}) returning id
+  `;
+  redirect(`/panel/sesiones/${sesion.id}`);
 }
 
 /** Fallback presencial (PRD M1): pega/dicta la transcripción o notas. */
 export async function guardarTranscripcion(sesionId: string, formData: FormData) {
-  await getProfesional();
-  const supabase = await supabaseServer();
-  const { error } = await supabase
-    .from("sesiones")
-    .update({ transcripcion: String(formData.get("transcripcion") ?? "") })
-    .eq("id", sesionId);
-  if (error) throw new Error(error.message);
+  const profesional = await getProfesional();
+  await verificarSesionDelTenant(sesionId, profesional.id);
+  await sql`
+    update sesiones set transcripcion = ${String(formData.get("transcripcion") ?? "")}
+    where id = ${sesionId}
+  `;
   revalidatePath(`/panel/sesiones/${sesionId}`);
 }
 
@@ -48,16 +49,12 @@ export async function guardarTranscripcion(sesionId: string, formData: FormData)
  */
 export async function generarBorradorSesion(sesionId: string) {
   const profesional = await getProfesional();
-  const supabase = await supabaseServer();
+  await verificarSesionDelTenant(sesionId, profesional.id);
 
-  const { data: sesion } = await supabase
-    .from("sesiones")
-    .select("id, transcripcion, cita_id")
-    .eq("id", sesionId)
-    .single();
-  if (!sesion?.transcripcion) {
-    throw new Error("No hay transcripción para resumir");
-  }
+  const [sesion] = await sql<{ transcripcion: string | null }[]>`
+    select transcripcion from sesiones where id = ${sesionId}
+  `;
+  if (!sesion?.transcripcion) throw new Error("No hay transcripción para resumir");
 
   const { provider, modelo } = providerParaTarea(profesional, "resumen_sesion");
   const respuesta = await provider.generar({
@@ -65,15 +62,13 @@ export async function generarBorradorSesion(sesionId: string) {
     usuario: promptResumenSesion(sesion.transcripcion),
   });
 
-  const { error } = await supabase
-    .from("sesiones")
-    .update({
-      borrador_ia: respuesta.texto,
-      estado: "borrador",
-      modelo_ia_usado: respuesta.modelo,
-    })
-    .eq("id", sesionId);
-  if (error) throw new Error(error.message);
+  await sql`
+    update sesiones set
+      borrador_ia = ${respuesta.texto},
+      estado = 'borrador',
+      modelo_ia_usado = ${respuesta.modelo}
+    where id = ${sesionId}
+  `;
 
   await auditarIA({
     profesionalId: profesional.id,
@@ -92,14 +87,12 @@ export async function corregirBorradorConPrompt(
   formData: FormData
 ) {
   const profesional = await getProfesional();
-  const supabase = await supabaseServer();
+  await verificarSesionDelTenant(sesionId, profesional.id);
   const instruccion = String(formData.get("instruccion") ?? "");
 
-  const { data: sesion } = await supabase
-    .from("sesiones")
-    .select("borrador_ia")
-    .eq("id", sesionId)
-    .single();
+  const [sesion] = await sql<{ borrador_ia: string | null }[]>`
+    select borrador_ia from sesiones where id = ${sesionId}
+  `;
   if (!sesion?.borrador_ia) throw new Error("No hay borrador que corregir");
 
   const { provider, modelo } = providerParaTarea(profesional, "resumen_sesion");
@@ -108,10 +101,12 @@ export async function corregirBorradorConPrompt(
     usuario: promptCorreccion(sesion.borrador_ia, instruccion),
   });
 
-  await supabase
-    .from("sesiones")
-    .update({ borrador_ia: respuesta.texto, modelo_ia_usado: respuesta.modelo })
-    .eq("id", sesionId);
+  await sql`
+    update sesiones set
+      borrador_ia = ${respuesta.texto},
+      modelo_ia_usado = ${respuesta.modelo}
+    where id = ${sesionId}
+  `;
 
   await auditarIA({
     profesionalId: profesional.id,
@@ -127,29 +122,28 @@ export async function corregirBorradorConPrompt(
 /** Solo lo aprobado ingresa a la ficha. Edición manual permitida al aprobar. */
 export async function aprobarResumen(sesionId: string, formData: FormData) {
   const profesional = await getProfesional();
-  const supabase = await supabaseServer();
+  await verificarSesionDelTenant(sesionId, profesional.id);
   const resumenFinal = String(formData.get("resumen") ?? "");
   const ideas = String(formData.get("ideas_proxima_sesion") ?? "");
 
-  const { data: sesion } = await supabase
-    .from("sesiones")
-    .select("modelo_ia_usado, audio_url")
-    .eq("id", sesionId)
-    .single();
+  const [sesion] = await sql<
+    { modelo_ia_usado: string | null; audio_url: string | null }[]
+  >`select modelo_ia_usado, audio_url from sesiones where id = ${sesionId}`;
 
-  const update: Record<string, unknown> = {
-    resumen_aprobado: resumenFinal,
-    ideas_proxima_sesion: ideas || null,
-    estado: "aprobado",
-    aprobado_at: new Date().toISOString(),
-  };
   // Minimización de datos (Ley 21.719): eliminar audio tras aprobar
-  if (profesional.config_retencion_audio?.eliminar_audio_al_aprobar && sesion?.audio_url) {
-    update.audio_url = null;
-  }
+  const borrarAudio =
+    !!profesional.config_retencion_audio?.eliminar_audio_al_aprobar &&
+    !!sesion?.audio_url;
 
-  const { error } = await supabase.from("sesiones").update(update).eq("id", sesionId);
-  if (error) throw new Error(error.message);
+  await sql`
+    update sesiones set
+      resumen_aprobado = ${resumenFinal},
+      ideas_proxima_sesion = ${ideas || null},
+      estado = 'aprobado',
+      aprobado_at = now(),
+      audio_url = ${borrarAudio ? null : (sesion?.audio_url ?? null)}
+    where id = ${sesionId}
+  `;
 
   await auditarIA({
     profesionalId: profesional.id,
@@ -162,17 +156,14 @@ export async function aprobarResumen(sesionId: string, formData: FormData) {
 
 export async function rechazarBorrador(sesionId: string) {
   const profesional = await getProfesional();
-  const supabase = await supabaseServer();
-  const { data: sesion } = await supabase
-    .from("sesiones")
-    .select("modelo_ia_usado")
-    .eq("id", sesionId)
-    .single();
-  const { error } = await supabase
-    .from("sesiones")
-    .update({ borrador_ia: null, estado: "rechazado" })
-    .eq("id", sesionId);
-  if (error) throw new Error(error.message);
+  await verificarSesionDelTenant(sesionId, profesional.id);
+  const [sesion] = await sql<{ modelo_ia_usado: string | null }[]>`
+    select modelo_ia_usado from sesiones where id = ${sesionId}
+  `;
+  await sql`
+    update sesiones set borrador_ia = null, estado = 'rechazado'
+    where id = ${sesionId}
+  `;
   await auditarIA({
     profesionalId: profesional.id,
     recurso: `sesion:${sesionId}`,

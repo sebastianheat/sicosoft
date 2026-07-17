@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { supabaseServer } from "@/lib/supabase/server";
+import { sql } from "@/lib/db";
 import { getProfesional } from "@/lib/actions/helpers";
 import { crearPaciente } from "@/lib/actions/pacientes";
 import {
@@ -21,12 +21,21 @@ export default async function PacientesPage({
   searchParams: Promise<{ nuevo?: string; error?: string }>;
 }) {
   const { nuevo, error } = await searchParams;
-  await getProfesional();
-  const supabase = await supabaseServer();
-  const { data: pacientes } = await supabase
-    .from("pacientes")
-    .select("id, nombre, email, estado, motivo_consulta, created_at")
-    .order("created_at", { ascending: false });
+  const profesional = await getProfesional();
+  const pacientes = await sql<
+    {
+      id: string;
+      nombre: string;
+      email: string | null;
+      estado: string;
+      motivo_consulta: string | null;
+    }[]
+  >`
+    select id, nombre, email, estado, motivo_consulta
+    from pacientes
+    where profesional_id = ${profesional.id}
+    order by created_at desc
+  `;
 
   return (
     <>

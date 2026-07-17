@@ -1,6 +1,6 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { supabaseServer } from "@/lib/supabase/server";
+import { sql } from "@/lib/db";
 import { getProfesional } from "@/lib/actions/helpers";
 import {
   aprobarInforme,
@@ -30,19 +30,34 @@ export default async function TestDetallePage({
   params: Promise<{ id: string }>;
 }) {
   const { id } = await params;
-  await getProfesional();
-  const supabase = await supabaseServer();
+  const profesional = await getProfesional();
 
-  const { data: aplicacion } = await supabase
-    .from("tests_aplicaciones")
-    .select("*, pacientes(id, nombre)")
-    .eq("id", id)
-    .single();
+  const [aplicacion] = await sql<
+    {
+      id: string;
+      test_codigo: string;
+      estado: string;
+      aplicado_via: string;
+      puntaje_total: number | null;
+      severidad: string | null;
+      subescalas: unknown;
+      observaciones_profesional: string | null;
+      interpretacion_borrador: string | null;
+      interpretacion_aprobada: string | null;
+      paciente_id: string;
+      paciente_nombre: string;
+    }[]
+  >`
+    select t.*, p.id as paciente_id, p.nombre as paciente_nombre
+    from tests_aplicaciones t
+    join pacientes p on p.id = t.paciente_id
+    where t.id = ${id} and p.profesional_id = ${profesional.id}
+  `;
   if (!aplicacion) notFound();
 
   const def = getTest(aplicacion.test_codigo);
   if (!def) notFound();
-  const paciente = aplicacion.pacientes as unknown as { id: string; nombre: string };
+  const paciente = { id: aplicacion.paciente_id, nombre: aplicacion.paciente_nombre };
 
   const subescalas =
     (aplicacion.subescalas as

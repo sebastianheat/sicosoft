@@ -2,8 +2,15 @@
 
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
-import { supabaseServer } from "@/lib/supabase/server";
-import { auditarIA, getProfesional, getPacienteActual, providerParaTarea } from "./helpers";
+import { sql } from "@/lib/db";
+import {
+  auditarIA,
+  getPacienteActual,
+  getProfesional,
+  providerParaTarea,
+  verificarAplicacionDelTenant,
+  verificarPacienteDelTenant,
+} from "./helpers";
 import { corregirTest, getTest, itemsPendientes } from "@/lib/tests";
 import {
   PIE_LEGAL_INFORME,
@@ -17,33 +24,35 @@ import {
  * o pre-sesión si el profesional lo habilita.
  */
 export async function asignarTest(formData: FormData) {
-  await getProfesional();
-  const supabase = await supabaseServer();
+  const profesional = await getProfesional();
+  const pacienteId = String(formData.get("paciente_id"));
+  await verificarPacienteDelTenant(pacienteId, profesional.id);
   const testCodigo = String(formData.get("test_codigo"));
   if (!getTest(testCodigo)) throw new Error("Test desconocido");
 
-  const { error } = await supabase.from("tests_aplicaciones").insert({
-    paciente_id: String(formData.get("paciente_id")),
-    test_codigo: testCodigo,
-    aplicado_via: String(formData.get("aplicado_via") ?? "vivo_supervisado"),
-  });
-  if (error) throw new Error(error.message);
+  await sql`
+    insert into tests_aplicaciones (paciente_id, test_codigo, aplicado_via)
+    values (
+      ${pacienteId},
+      ${testCodigo},
+      ${String(formData.get("aplicado_via") ?? "vivo_supervisado")}
+    )
+  `;
   revalidatePath("/panel/tests");
   redirect("/panel/tests");
 }
 
 /**
- * Envío de respuestas (paciente en su intranet, o profesional en modo manual).
- * Corrección automática inmediata: puntaje, severidad y subescalas.
+ * Corrección automática compartida: valida completitud, calcula
+ * puntaje, subescalas y severidad, y persiste las respuestas.
  */
-export async function responderTest(aplicacionId: string, formData: FormData) {
-  const supabase = await supabaseServer();
-
-  const { data: aplicacion } = await supabase
-    .from("tests_aplicaciones")
-    .select("id, test_codigo, paciente_id, estado")
-    .eq("id", aplicacionId)
-    .single();
+async function corregirYGuardar(aplicacionId: string, formData: FormData) {
+  const [aplicacion] = await sql<
+    { id: string; test_codigo: string; estado: string }[]
+  >`
+    select id, test_codigo, estado from tests_aplicaciones
+    where id = ${aplicacionId}
+  `;
   if (!aplicacion) throw new Error("Aplicación no encontrada");
   if (!["pendiente", "en_curso"].includes(aplicacion.estado)) {
     throw new Error("Este test ya fue respondido");
@@ -63,30 +72,40 @@ export async function responderTest(aplicacionId: string, formData: FormData) {
   }
 
   const resultado = corregirTest(def, respuestas);
-  const { error } = await supabase
-    .from("tests_aplicaciones")
-    .update({
-      respuestas,
-      puntaje_total: resultado.puntajeTotal,
-      subescalas: resultado.subescalas,
-      severidad: resultado.severidad,
-      estado: "respondido",
-      respondido_at: new Date().toISOString(),
-    })
-    .eq("id", aplicacionId);
-  if (error) throw new Error(error.message);
+  await sql`
+    update tests_aplicaciones set
+      respuestas = ${sql.json(respuestas)},
+      puntaje_total = ${resultado.puntajeTotal},
+      subescalas = ${sql.json(JSON.parse(JSON.stringify(resultado.subescalas)))},
+      severidad = ${resultado.severidad},
+      estado = 'respondido',
+      respondido_at = now()
+    where id = ${aplicacionId}
+  `;
 
   revalidatePath("/portal");
   revalidatePath("/panel/tests");
 }
 
-/** Wrapper para el portal del paciente (valida pertenencia vía RLS). */
+/** Envío de respuestas por el profesional (modo manual o en vivo). */
+export async function responderTest(aplicacionId: string, formData: FormData) {
+  const profesional = await getProfesional();
+  await verificarAplicacionDelTenant(aplicacionId, profesional.id);
+  await corregirYGuardar(aplicacionId, formData);
+}
+
+/** Envío de respuestas por el paciente desde su intranet. */
 export async function responderTestComoPaciente(
   aplicacionId: string,
   formData: FormData
 ) {
-  await getPacienteActual();
-  await responderTest(aplicacionId, formData);
+  const paciente = await getPacienteActual();
+  const propia = await sql`
+    select 1 from tests_aplicaciones
+    where id = ${aplicacionId} and paciente_id = ${paciente.id}
+  `;
+  if (!propia.length) throw new Error("Test no asignado a tu cuenta");
+  await corregirYGuardar(aplicacionId, formData);
   redirect("/portal?test=respondido");
 }
 
@@ -98,15 +117,13 @@ export async function guardarObservaciones(
   aplicacionId: string,
   formData: FormData
 ) {
-  await getProfesional();
-  const supabase = await supabaseServer();
-  const { error } = await supabase
-    .from("tests_aplicaciones")
-    .update({
-      observaciones_profesional: String(formData.get("observaciones") ?? ""),
-    })
-    .eq("id", aplicacionId);
-  if (error) throw new Error(error.message);
+  const profesional = await getProfesional();
+  await verificarAplicacionDelTenant(aplicacionId, profesional.id);
+  await sql`
+    update tests_aplicaciones set
+      observaciones_profesional = ${String(formData.get("observaciones") ?? "")}
+    where id = ${aplicacionId}
+  `;
   revalidatePath(`/panel/tests/${aplicacionId}`);
 }
 
@@ -116,13 +133,20 @@ export async function guardarObservaciones(
  */
 export async function generarInformeTest(aplicacionId: string) {
   const profesional = await getProfesional();
-  const supabase = await supabaseServer();
+  await verificarAplicacionDelTenant(aplicacionId, profesional.id);
 
-  const { data: aplicacion } = await supabase
-    .from("tests_aplicaciones")
-    .select("*")
-    .eq("id", aplicacionId)
-    .single();
+  const [aplicacion] = await sql<
+    {
+      test_codigo: string;
+      puntaje_total: number | null;
+      severidad: string | null;
+      subescalas: unknown;
+      observaciones_profesional: string | null;
+    }[]
+  >`
+    select test_codigo, puntaje_total, severidad, subescalas, observaciones_profesional
+    from tests_aplicaciones where id = ${aplicacionId}
+  `;
   if (!aplicacion) throw new Error("Aplicación no encontrada");
   if (!aplicacion.observaciones_profesional) {
     throw new Error(
@@ -132,12 +156,13 @@ export async function generarInformeTest(aplicacionId: string) {
   const def = getTest(aplicacion.test_codigo);
   if (!def) throw new Error("Definición no encontrada");
 
-  const { data: plantillas } = await supabase
-    .from("plantillas_informe")
-    .select("estructura_json, membrete")
-    .eq("profesional_id", profesional.id)
-    .eq("tipo", "test")
-    .limit(1);
+  const plantillas = await sql<
+    { estructura_json: unknown; membrete: string | null }[]
+  >`
+    select estructura_json, membrete from plantillas_informe
+    where profesional_id = ${profesional.id} and tipo = 'test'
+    limit 1
+  `;
 
   const { provider, modelo } = providerParaTarea(profesional, "informe_test");
   const respuesta = await provider.generar({
@@ -155,20 +180,18 @@ export async function generarInformeTest(aplicacionId: string) {
         2
       ),
       observaciones: aplicacion.observaciones_profesional,
-      plantilla: plantillas?.[0]
+      plantilla: plantillas[0]
         ? JSON.stringify(plantillas[0].estructura_json)
         : undefined,
     }),
   });
 
-  const { error } = await supabase
-    .from("tests_aplicaciones")
-    .update({
-      interpretacion_borrador: respuesta.texto,
-      estado: "corregido",
-    })
-    .eq("id", aplicacionId);
-  if (error) throw new Error(error.message);
+  await sql`
+    update tests_aplicaciones set
+      interpretacion_borrador = ${respuesta.texto},
+      estado = 'corregido'
+    where id = ${aplicacionId}
+  `;
 
   await auditarIA({
     profesionalId: profesional.id,
@@ -186,14 +209,12 @@ export async function corregirInformeConPrompt(
   formData: FormData
 ) {
   const profesional = await getProfesional();
-  const supabase = await supabaseServer();
+  await verificarAplicacionDelTenant(aplicacionId, profesional.id);
   const instruccion = String(formData.get("instruccion") ?? "");
 
-  const { data: aplicacion } = await supabase
-    .from("tests_aplicaciones")
-    .select("interpretacion_borrador")
-    .eq("id", aplicacionId)
-    .single();
+  const [aplicacion] = await sql<{ interpretacion_borrador: string | null }[]>`
+    select interpretacion_borrador from tests_aplicaciones where id = ${aplicacionId}
+  `;
   if (!aplicacion?.interpretacion_borrador) {
     throw new Error("No hay borrador que corregir");
   }
@@ -204,10 +225,10 @@ export async function corregirInformeConPrompt(
     usuario: promptCorreccion(aplicacion.interpretacion_borrador, instruccion),
   });
 
-  await supabase
-    .from("tests_aplicaciones")
-    .update({ interpretacion_borrador: respuesta.texto })
-    .eq("id", aplicacionId);
+  await sql`
+    update tests_aplicaciones set interpretacion_borrador = ${respuesta.texto}
+    where id = ${aplicacionId}
+  `;
 
   await auditarIA({
     profesionalId: profesional.id,
@@ -223,21 +244,18 @@ export async function corregirInformeConPrompt(
 /** Solo lo aprobado ingresa al timeline. Incluye pie legal (PRD M3). */
 export async function aprobarInforme(aplicacionId: string, formData: FormData) {
   const profesional = await getProfesional();
-  const supabase = await supabaseServer();
+  await verificarAplicacionDelTenant(aplicacionId, profesional.id);
   const texto = String(formData.get("interpretacion") ?? "");
   const conPie =
-    texto +
-    PIE_LEGAL_INFORME(profesional.nombre, profesional.n_registro ?? "");
+    texto + PIE_LEGAL_INFORME(profesional.nombre, profesional.n_registro ?? "");
 
-  const { error } = await supabase
-    .from("tests_aplicaciones")
-    .update({
-      interpretacion_aprobada: conPie,
-      estado: "aprobado",
-      aprobado_at: new Date().toISOString(),
-    })
-    .eq("id", aplicacionId);
-  if (error) throw new Error(error.message);
+  await sql`
+    update tests_aplicaciones set
+      interpretacion_aprobada = ${conPie},
+      estado = 'aprobado',
+      aprobado_at = now()
+    where id = ${aplicacionId}
+  `;
 
   await auditarIA({
     profesionalId: profesional.id,

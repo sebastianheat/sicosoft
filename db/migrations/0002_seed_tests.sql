@@ -1,4 +1,4 @@
--- Seed: registro de instrumentos de libre uso (M2 v1).
+-- Catálogo de instrumentos de libre uso (M2 v1).
 -- La definición completa (ítems, escalas, rangos) vive en el código
 -- (src/lib/tests) como fuente de verdad del MVP; esta tabla mantiene
 -- la integridad referencial y el catálogo consultable.

@@ -1,52 +1,38 @@
-import { createServerClient } from "@supabase/ssr";
 import { NextResponse, type NextRequest } from "next/server";
+import { jwtVerify } from "jose";
 
-const RUTAS_PUBLICAS = ["/", "/login", "/registro", "/auth"];
+const RUTAS_PUBLICAS = ["/", "/login", "/registro"];
+const COOKIE_SESION = "sesion";
 
 export default async function proxy(request: NextRequest) {
-  let response = NextResponse.next({ request });
-
-  const supabase = createServerClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
-    {
-      cookies: {
-        getAll() {
-          return request.cookies.getAll();
-        },
-        setAll(cookiesToSet) {
-          cookiesToSet.forEach(({ name, value }) =>
-            request.cookies.set(name, value)
-          );
-          response = NextResponse.next({ request });
-          cookiesToSet.forEach(({ name, value, options }) =>
-            response.cookies.set(name, value, options)
-          );
-        },
-      },
-    }
-  );
-
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-
   const { pathname } = request.nextUrl;
   const esPublica = RUTAS_PUBLICAS.some(
     (r) => pathname === r || pathname.startsWith(`${r}/`)
   );
 
-  if (!user && !esPublica) {
+  const token = request.cookies.get(COOKIE_SESION)?.value;
+  let rol: string | null = null;
+  if (token && process.env.AUTH_SECRET) {
+    try {
+      const { payload } = await jwtVerify(
+        token,
+        new TextEncoder().encode(process.env.AUTH_SECRET)
+      );
+      rol = (payload.rol as string) ?? null;
+    } catch {
+      rol = null;
+    }
+  }
+
+  if (!rol && !esPublica) {
     const url = request.nextUrl.clone();
     url.pathname = "/login";
     url.searchParams.set("next", pathname);
     return NextResponse.redirect(url);
   }
 
-  // El rol (profesional | paciente) viene en metadata del usuario;
-  // RLS en la base es la garantía real — esto solo enruta la UI.
-  if (user) {
-    const rol = (user.user_metadata?.rol as string) ?? "profesional";
+  // Enrutamiento por rol; la garantía real de acceso está en la capa de datos.
+  if (rol) {
     if (pathname.startsWith("/panel") && rol === "paciente") {
       return NextResponse.redirect(new URL("/portal", request.url));
     }
@@ -55,7 +41,7 @@ export default async function proxy(request: NextRequest) {
     }
   }
 
-  return response;
+  return NextResponse.next();
 }
 
 export const config = {

@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { supabaseServer } from "@/lib/supabase/server";
+import { sql } from "@/lib/db";
 import { getProfesional } from "@/lib/actions/helpers";
 import { Badge, Card, EstadoVacio, Subtitulo, Titulo } from "@/components/ui";
 
@@ -7,36 +7,46 @@ export const dynamic = "force-dynamic";
 
 export default async function DashboardPage() {
   const profesional = await getProfesional();
-  const supabase = await supabaseServer();
-  const hoy = new Date();
-  const en7dias = new Date(hoy.getTime() + 7 * 24 * 3600 * 1000);
 
-  const [{ data: citas }, { data: borradores }, { data: pagosPendientes }] =
-    await Promise.all([
-      supabase
-        .from("citas")
-        .select("id, fecha, tipo, meet_link, estado, pacientes(nombre)")
-        .gte("fecha", hoy.toISOString())
-        .lte("fecha", en7dias.toISOString())
-        .in("estado", ["agendada", "confirmada"])
-        .order("fecha")
-        .limit(8),
-      supabase
-        .from("sesiones")
-        .select("id, created_at, estado, citas(fecha, pacientes(nombre))")
-        .eq("estado", "borrador")
-        .order("created_at", { ascending: false })
-        .limit(5),
-      supabase
-        .from("pagos")
-        .select("id, monto, estado")
-        .in("estado", ["pendiente", "parcial"]),
-    ]);
+  const [citas, borradores, pagosPendientes] = await Promise.all([
+    sql<
+      {
+        id: string;
+        fecha: string;
+        tipo: string;
+        meet_link: string | null;
+        paciente_nombre: string;
+      }[]
+    >`
+      select c.id, c.fecha, c.tipo, c.meet_link, p.nombre as paciente_nombre
+      from citas c
+      join pacientes p on p.id = c.paciente_id
+      where p.profesional_id = ${profesional.id}
+        and c.fecha between now() and now() + interval '7 days'
+        and c.estado in ('agendada', 'confirmada')
+      order by c.fecha
+      limit 8
+    `,
+    sql<{ id: string; paciente_nombre: string }[]>`
+      select s.id, p.nombre as paciente_nombre
+      from sesiones s
+      join citas c on c.id = s.cita_id
+      join pacientes p on p.id = c.paciente_id
+      where p.profesional_id = ${profesional.id} and s.estado = 'borrador'
+      order by s.created_at desc
+      limit 5
+    `,
+    sql<{ id: string; monto: number }[]>`
+      select pg.id, pg.monto
+      from pagos pg
+      join citas c on c.id = pg.cita_id
+      join pacientes p on p.id = c.paciente_id
+      where p.profesional_id = ${profesional.id}
+        and pg.estado in ('pendiente', 'parcial')
+    `,
+  ]);
 
-  const totalPendiente = (pagosPendientes ?? []).reduce(
-    (acc, p) => acc + p.monto,
-    0
-  );
+  const totalPendiente = pagosPendientes.reduce((acc, p) => acc + p.monto, 0);
 
   return (
     <>
@@ -55,14 +65,12 @@ export default async function DashboardPage() {
               Ver agenda
             </Link>
           </div>
-          {citas?.length ? (
+          {citas.length ? (
             <ul className="divide-y divide-border">
               {citas.map((c) => (
                 <li key={c.id} className="flex items-center justify-between py-2">
                   <div>
-                    <p className="text-sm font-medium">
-                      {(c.pacientes as unknown as { nombre: string })?.nombre}
-                    </p>
+                    <p className="text-sm font-medium">{c.paciente_nombre}</p>
                     <p className="text-xs text-ink/50">
                       {new Date(c.fecha).toLocaleString("es-CL", {
                         weekday: "short",
@@ -95,29 +103,23 @@ export default async function DashboardPage() {
         <Card>
           <div className="mb-3 flex items-center justify-between">
             <Subtitulo>Borradores por revisar</Subtitulo>
-            <Badge nivel="warning">{borradores?.length ?? 0}</Badge>
+            <Badge nivel="warning">{borradores.length}</Badge>
           </div>
-          {borradores?.length ? (
+          {borradores.length ? (
             <ul className="divide-y divide-border">
-              {borradores.map((b) => {
-                const cita = b.citas as unknown as {
-                  fecha: string;
-                  pacientes: { nombre: string };
-                } | null;
-                return (
-                  <li key={b.id} className="py-2">
-                    <Link
-                      href={`/panel/sesiones/${b.id}`}
-                      className="text-sm font-medium text-primary hover:underline"
-                    >
-                      Sesión de {cita?.pacientes?.nombre ?? "paciente"}
-                    </Link>
-                    <p className="text-xs text-ink/50">
-                      Borrador de resumen esperando tu aprobación
-                    </p>
-                  </li>
-                );
-              })}
+              {borradores.map((b) => (
+                <li key={b.id} className="py-2">
+                  <Link
+                    href={`/panel/sesiones/${b.id}`}
+                    className="text-sm font-medium text-primary hover:underline"
+                  >
+                    Sesión de {b.paciente_nombre}
+                  </Link>
+                  <p className="text-xs text-ink/50">
+                    Borrador de resumen esperando tu aprobación
+                  </p>
+                </li>
+              ))}
             </ul>
           ) : (
             <EstadoVacio mensaje="No hay borradores pendientes de revisión" />
@@ -130,7 +132,7 @@ export default async function DashboardPage() {
             ${totalPendiente.toLocaleString("es-CL")}
           </p>
           <p className="text-sm text-ink/50">
-            {pagosPendientes?.length ?? 0} sesiones por cobrar ·{" "}
+            {pagosPendientes.length} sesiones por cobrar ·{" "}
             <Link href="/panel/finanzas" className="text-primary hover:underline">
               ir a finanzas
             </Link>

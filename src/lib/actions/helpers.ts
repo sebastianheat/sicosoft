@@ -1,5 +1,6 @@
 import "server-only";
-import { supabaseServer } from "@/lib/supabase/server";
+import { sql } from "@/lib/db";
+import { obtenerSesion } from "@/lib/auth/session";
 import { descifrar } from "@/lib/crypto";
 import {
   crearProvider,
@@ -25,35 +26,81 @@ export interface Profesional {
 
 /** Tenant del usuario autenticado; lanza si no hay sesión de profesional. */
 export async function getProfesional(): Promise<Profesional> {
-  const supabase = await supabaseServer();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-  if (!user) throw new Error("No autenticado");
-  const { data, error } = await supabase
-    .from("profesionales")
-    .select("*")
-    .eq("user_id", user.id)
-    .single();
-  if (error || !data) throw new Error("Perfil de profesional no encontrado");
-  return data as Profesional;
+  const sesion = await obtenerSesion();
+  if (!sesion) throw new Error("No autenticado");
+  const filas = await sql<Profesional[]>`
+    select * from profesionales where user_id = ${sesion.userId}
+  `;
+  if (!filas.length) throw new Error("Perfil de profesional no encontrado");
+  return filas[0];
 }
 
 /** Paciente del usuario autenticado (rol paciente en la intranet). */
 export async function getPacienteActual() {
-  const supabase = await supabaseServer();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-  if (!user) throw new Error("No autenticado");
-  const { data, error } = await supabase
-    .from("pacientes")
-    .select("id, nombre, profesional_id")
-    .eq("user_id", user.id)
-    .single();
-  if (error || !data) throw new Error("Perfil de paciente no encontrado");
-  return data;
+  const sesion = await obtenerSesion();
+  if (!sesion) throw new Error("No autenticado");
+  const filas = await sql<
+    { id: string; nombre: string; profesional_id: string }[]
+  >`
+    select id, nombre, profesional_id from pacientes where user_id = ${sesion.userId}
+  `;
+  if (!filas.length) throw new Error("Perfil de paciente no encontrado");
+  return filas[0];
 }
+
+// ── Guardas de tenant ────────────────────────────────────────
+// Toda operación sobre un recurso verifica que pertenezca al
+// profesional autenticado antes de tocarlo (aislamiento multi-tenant).
+
+export async function verificarPacienteDelTenant(
+  pacienteId: string,
+  profesionalId: string
+) {
+  const filas = await sql`
+    select 1 from pacientes
+    where id = ${pacienteId} and profesional_id = ${profesionalId}
+  `;
+  if (!filas.length) throw new Error("Paciente no pertenece a tu cuenta");
+}
+
+export async function verificarCitaDelTenant(
+  citaId: string,
+  profesionalId: string
+) {
+  const filas = await sql`
+    select 1 from citas c
+    join pacientes p on p.id = c.paciente_id
+    where c.id = ${citaId} and p.profesional_id = ${profesionalId}
+  `;
+  if (!filas.length) throw new Error("Cita no pertenece a tu cuenta");
+}
+
+export async function verificarSesionDelTenant(
+  sesionId: string,
+  profesionalId: string
+) {
+  const filas = await sql`
+    select 1 from sesiones s
+    join citas c on c.id = s.cita_id
+    join pacientes p on p.id = c.paciente_id
+    where s.id = ${sesionId} and p.profesional_id = ${profesionalId}
+  `;
+  if (!filas.length) throw new Error("Sesión no pertenece a tu cuenta");
+}
+
+export async function verificarAplicacionDelTenant(
+  aplicacionId: string,
+  profesionalId: string
+) {
+  const filas = await sql`
+    select 1 from tests_aplicaciones t
+    join pacientes p on p.id = t.paciente_id
+    where t.id = ${aplicacionId} and p.profesional_id = ${profesionalId}
+  `;
+  if (!filas.length) throw new Error("Aplicación no pertenece a tu cuenta");
+}
+
+// ── IA ───────────────────────────────────────────────────────
 
 /**
  * Provider de IA para una tarea según la config del profesional (BYOK).
@@ -86,13 +133,9 @@ export async function auditarIA(args: {
   tokensInput?: number;
   tokensOutput?: number;
 }) {
-  const supabase = await supabaseServer();
-  await supabase.from("auditoria_ia").insert({
-    profesional_id: args.profesionalId,
-    recurso: args.recurso,
-    modelo: args.modelo,
-    accion: args.accion,
-    tokens_input: args.tokensInput ?? null,
-    tokens_output: args.tokensOutput ?? null,
-  });
+  await sql`
+    insert into auditoria_ia (profesional_id, recurso, modelo, accion, tokens_input, tokens_output)
+    values (${args.profesionalId}, ${args.recurso}, ${args.modelo}, ${args.accion},
+            ${args.tokensInput ?? null}, ${args.tokensOutput ?? null})
+  `;
 }

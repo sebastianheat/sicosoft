@@ -2,60 +2,52 @@
 
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
-import { supabaseServer } from "@/lib/supabase/server";
-import { getProfesional } from "./helpers";
+import { sql } from "@/lib/db";
+import {
+  getProfesional,
+  verificarCitaDelTenant,
+  verificarPacienteDelTenant,
+} from "./helpers";
 
 export async function crearCita(formData: FormData) {
-  await getProfesional();
-  const supabase = await supabaseServer();
+  const profesional = await getProfesional();
+  const pacienteId = String(formData.get("paciente_id"));
+  await verificarPacienteDelTenant(pacienteId, profesional.id);
 
   const fecha = String(formData.get("fecha"));
   const hora = String(formData.get("hora"));
-  const { error } = await supabase.from("citas").insert({
-    paciente_id: String(formData.get("paciente_id")),
-    fecha: new Date(`${fecha}T${hora}:00`).toISOString(),
-    duracion_min: Number(formData.get("duracion_min") ?? 50),
-    tipo: String(formData.get("tipo") ?? "online"),
-    valor: Number(formData.get("valor") ?? 0),
-    // gcal_event_id y meet_link se completan con la integración
-    // de Google Calendar (crea el evento y su sala de Meet).
-    meet_link: String(formData.get("meet_link") ?? "") || null,
-  });
-  if (error) {
-    redirect(`/panel/agenda?error=${encodeURIComponent(error.message)}`);
-  }
+  await sql`
+    insert into citas (paciente_id, fecha, duracion_min, tipo, valor, meet_link)
+    values (
+      ${pacienteId},
+      ${new Date(`${fecha}T${hora}:00`).toISOString()},
+      ${Number(formData.get("duracion_min") ?? 50)},
+      ${String(formData.get("tipo") ?? "online")},
+      ${Number(formData.get("valor") ?? 0)},
+      ${String(formData.get("meet_link") ?? "") || null}
+    )
+  `;
   revalidatePath("/panel/agenda");
   redirect("/panel/agenda");
 }
 
 export async function cambiarEstadoCita(citaId: string, estado: string) {
-  await getProfesional();
-  const supabase = await supabaseServer();
-  const { error } = await supabase
-    .from("citas")
-    .update({ estado })
-    .eq("id", citaId);
-  if (error) throw new Error(error.message);
+  const profesional = await getProfesional();
+  await verificarCitaDelTenant(citaId, profesional.id);
+  await sql`update citas set estado = ${estado} where id = ${citaId}`;
 
   // Una cita realizada con valor genera automáticamente su cobro pendiente
   if (estado === "realizada") {
-    const { data: cita } = await supabase
-      .from("citas")
-      .select("id, valor")
-      .eq("id", citaId)
-      .single();
+    const [cita] = await sql<{ id: string; valor: number }[]>`
+      select id, valor from citas where id = ${citaId}
+    `;
     if (cita && cita.valor > 0) {
-      const { data: pagoExistente } = await supabase
-        .from("pagos")
-        .select("id")
-        .eq("cita_id", citaId)
-        .limit(1);
-      if (!pagoExistente?.length) {
-        await supabase.from("pagos").insert({
-          cita_id: citaId,
-          monto: cita.valor,
-          estado: "pendiente",
-        });
+      const pagoExistente = await sql`select 1 from pagos where cita_id = ${citaId} limit 1`;
+      if (!pagoExistente.length) {
+        await sql`
+          insert into pagos (cita_id, monto, estado)
+          values (${citaId}, ${cita.valor}, 'pendiente')
+        `;
       }
     }
   }

@@ -7,9 +7,10 @@ Plataforma exclusiva para psicólogos (Chile, proyección internacional) que eli
 ## Stack
 
 - **Next.js 16** (App Router, Server Actions) + TypeScript + Tailwind v4
-- **Supabase**: Postgres + Auth + RLS (multi-tenancy por profesional)
+- **Postgres** (Neon u otra base conectada vía Vercel) con aislamiento multi-tenant en la capa de datos
+- **Auth propia**: JWT (jose) en cookie httpOnly + bcrypt, roles `profesional` / `paciente`
 - **Capa IA multi-modelo BYOK**: Anthropic / OpenAI / Google, key propia cifrada (AES-256-GCM por tenant)
-- Deploy pensado para **Vercel**
+- Deploy en **Vercel**
 
 ## Qué está construido (MVP en curso)
 
@@ -20,39 +21,36 @@ Plataforma exclusiva para psicólogos (Chile, proyección internacional) que eli
 | M2 — Tests de libre uso: PHQ-9, GAD-7, Goldberg (EADG), AUDIT, ASSIST con corrección automática, subescalas, alertas de riesgo y motor declarativo | ✅ funcional |
 | M2 — Observaciones obligatorias + "Corregir con IA" → informe borrador → aprobación con pie legal | ✅ funcional |
 | M4 — Finanzas: cobro automático al marcar cita realizada, registro de pagos, resumen mensual | ✅ funcional (Fintoc pendiente) |
-| M5 — Intranet paciente: próxima sesión + link Meet, responder tests, tareas, check-in de ánimo | ✅ funcional |
+| M5 — Intranet paciente: próxima sesión + link Meet, responder tests, tareas, check-in de ánimo, creación de acceso desde la ficha | ✅ funcional |
 | Configuración: BYOK por proveedor, modelo por tarea, retención de audio (Ley 21.719) | ✅ funcional |
 | Integraciones Google Calendar/Meet, Gemini STT, Fintoc, WhatsApp, Stripe | 🔜 siguientes pasos |
 | M3 — Biblioteca de baremos por tenant (tests licenciados) | 🔜 Fase 1.5 (esquema de BD ya listo) |
 
+Todo el flujo está verificado con una prueba e2e real (`scripts/e2e.mjs`): registro → paciente → consentimientos → cita → cobro → sesión → PHQ-9 corregido → portal del paciente → aislamiento entre tenants.
+
 ## Puesta en marcha
 
-### 1. Crear el proyecto Supabase (única acción manual imprescindible)
+### En Vercel (recomendado)
 
-1. Crear un proyecto en [supabase.com](https://supabase.com).
-2. En **SQL Editor**, ejecutar en orden:
-   - `supabase/migrations/00001_schema_inicial.sql` (tablas + RLS)
-   - `supabase/seed.sql` (catálogo de tests)
-3. En **Authentication → Providers → Email**: desactivar "Confirm email" para el MVP (o configurar SMTP).
-4. Copiar de **Settings → API**: la URL del proyecto y la `anon key`.
+1. Importar este repo como proyecto en Vercel.
+2. **Storage → Create/Connect Database → Neon** (u otra Postgres): esto inyecta `DATABASE_URL` sola.
+3. Agregar en Environment Variables:
+   - `AUTH_SECRET` → `openssl rand -base64 32`
+   - `APP_ENCRYPTION_KEY` → `openssl rand -base64 32`
+4. Aplicar el esquema (una vez): local con la misma URL de Neon:
+   ```bash
+   DATABASE_URL="postgres://…neon…" npm run db:migrate
+   ```
+5. Deploy. Registrarse en `/registro` y listo.
 
-### 2. Variables de entorno
-
-```bash
-cp .env.example .env.local
-# completar NEXT_PUBLIC_SUPABASE_URL y NEXT_PUBLIC_SUPABASE_ANON_KEY
-# generar la clave de cifrado BYOK:
-openssl rand -base64 32   # → APP_ENCRYPTION_KEY
-```
-
-### 3. Ejecutar
+### En local
 
 ```bash
 npm install
+cp .env.example .env.local   # completar DATABASE_URL, AUTH_SECRET, APP_ENCRYPTION_KEY
+npm run db:migrate
 npm run dev
 ```
-
-Abrir http://localhost:3000 → **Crear cuenta profesional** → listo.
 
 ### Flujo de prueba rápido (criterios de éxito del MVP)
 
@@ -61,31 +59,33 @@ Abrir http://localhost:3000 → **Crear cuenta profesional** → listo.
 3. Agendar una cita, marcarla **Realizada** → se genera el cobro en Finanzas.
 4. Abrir la sesión, pegar una transcripción → **Generar borrador con IA** → aprobar (requiere API key en Configuración).
 5. Asignar un PHQ-9 → responderlo → registrar observaciones → **Corregir con IA** → aprobar informe (sale con pie legal).
-6. Para probar la intranet: crear en Supabase Auth un usuario con metadata `{"rol": "paciente"}` y setear su `user_id` en la fila del paciente.
+6. En la ficha, **crear el acceso a la intranet** del paciente: entra en `/login` con su email y ve su próxima sesión, tests y tareas.
 
 ## Estructura
 
 ```
 src/
   app/
-    login, registro          → auth
+    login, registro          → auth (roles profesional/paciente)
     panel/                   → psicólogo: dashboard, agenda, pacientes,
                                sesiones, tests, finanzas, configuración
     portal/                  → paciente: próxima sesión, tests, tareas, ánimo
   lib/
     ai/                      → AIProvider (Anthropic·OpenAI·Google), prompts, BYOK
     tests/                   → motor declarativo + 5 instrumentos de libre uso
-    actions/                 → server actions por módulo
-    supabase/                → clientes SSR/browser
+    actions/                 → server actions por módulo + guardas de tenant
+    auth/                    → sesión JWT (cookie httpOnly)
+    db.ts                    → cliente Postgres (conexión perezosa)
     crypto.ts                → AES-256-GCM por tenant
-supabase/
-  migrations/                → esquema completo con RLS
-  seed.sql                   → catálogo de instrumentos
+db/migrations/               → esquema versionado (runner: npm run db:migrate)
+scripts/
+  migrate.mjs                → migraciones idempotentes
+  e2e.mjs                    → prueba end-to-end del MVP (Playwright)
 ```
 
 ## Seguridad y cumplimiento (Ley 21.719)
 
-- **RLS estricta**: cada tabla filtrada por tenant; el rol paciente solo ve sus citas (link Meet), tests, tareas y check-ins — nunca la ficha ni borradores.
+- **Aislamiento multi-tenant en la capa de datos**: toda consulta se filtra por `profesional_id` derivado de la sesión; toda acción verifica pertenencia del recurso antes de tocarlo (guardas en `lib/actions/helpers.ts`). Verificado por e2e: otro profesional no ve pacientes ajenos (404) y el rol paciente no entra al panel.
 - **Consentimientos separables** por finalidad; sin consentimiento de grabación la sesión no procesa audio.
 - **BYOK cifrado** AES-256-GCM con clave derivada por tenant; nunca en logs.
 - **Auditoría de IA**: qué modelo generó qué borrador y qué decidió el profesional.

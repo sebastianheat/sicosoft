@@ -1,6 +1,6 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { supabaseServer } from "@/lib/supabase/server";
+import { sql } from "@/lib/db";
 import { getProfesional } from "@/lib/actions/helpers";
 import { tieneConsentimientoGrabacion } from "@/lib/actions/pacientes";
 import {
@@ -29,25 +29,42 @@ export default async function SesionPage({
   params: Promise<{ id: string }>;
 }) {
   const { id } = await params;
-  await getProfesional();
-  const supabase = await supabaseServer();
+  const profesional = await getProfesional();
 
-  const { data: sesion } = await supabase
-    .from("sesiones")
-    .select("*, citas(id, fecha, tipo, paciente_id, pacientes(id, nombre))")
-    .eq("id", id)
-    .single();
+  const [sesion] = await sql<
+    {
+      id: string;
+      transcripcion: string | null;
+      borrador_ia: string | null;
+      resumen_aprobado: string | null;
+      ideas_proxima_sesion: string | null;
+      estado: string;
+      modelo_ia_usado: string | null;
+      aprobado_at: string | null;
+      cita_fecha: string;
+      cita_tipo: string;
+      paciente_id: string;
+      paciente_nombre: string;
+    }[]
+  >`
+    select s.id, s.transcripcion, s.borrador_ia, s.resumen_aprobado,
+           s.ideas_proxima_sesion, s.estado, s.modelo_ia_usado, s.aprobado_at,
+           c.fecha as cita_fecha, c.tipo as cita_tipo,
+           p.id as paciente_id, p.nombre as paciente_nombre
+    from sesiones s
+    join citas c on c.id = s.cita_id
+    join pacientes p on p.id = c.paciente_id
+    where s.id = ${id} and p.profesional_id = ${profesional.id}
+  `;
   if (!sesion) notFound();
 
-  const cita = sesion.citas as unknown as {
-    id: string;
-    fecha: string;
-    tipo: string;
-    paciente_id: string;
-    pacientes: { id: string; nombre: string };
+  const cita = {
+    fecha: sesion.cita_fecha,
+    tipo: sesion.cita_tipo,
+    pacientes: { id: sesion.paciente_id, nombre: sesion.paciente_nombre },
   };
   const consentimientoGrabacion = await tieneConsentimientoGrabacion(
-    cita.paciente_id
+    sesion.paciente_id
   );
 
   const guardarConId = guardarTranscripcion.bind(null, id);
@@ -114,7 +131,10 @@ export default async function SesionPage({
             </>
           )}
           <p className="mt-4 text-xs text-ink/40">
-            Aprobado el {new Date(sesion.aprobado_at).toLocaleString("es-CL")}
+            Aprobado el{" "}
+            {sesion.aprobado_at
+              ? new Date(sesion.aprobado_at).toLocaleString("es-CL")
+              : "—"}
             {sesion.modelo_ia_usado && ` · borrador generado por ${sesion.modelo_ia_usado}`}
           </p>
         </Card>

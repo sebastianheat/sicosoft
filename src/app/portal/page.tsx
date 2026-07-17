@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { supabaseServer } from "@/lib/supabase/server";
+import { sql } from "@/lib/db";
 import { getPacienteActual } from "@/lib/actions/helpers";
 import { marcarTarea, registrarCheckin } from "@/lib/actions/portal";
 import { getTest } from "@/lib/tests";
@@ -29,41 +29,39 @@ export default async function PortalPage({
 }) {
   const { test } = await searchParams;
   const paciente = await getPacienteActual();
-  const supabase = await supabaseServer();
-  const hoyIso = new Date().toISOString();
-  const hoyFecha = hoyIso.slice(0, 10);
 
-  const [{ data: proximaCita }, { data: testsPendientes }, { data: tareas }, { data: checkinHoy }] =
+  const [proximasCitas, testsPendientes, tareas, checkinsHoy] =
     await Promise.all([
-      supabase
-        .from("citas")
-        .select("id, fecha, tipo, meet_link")
-        .eq("paciente_id", paciente.id)
-        .gte("fecha", hoyIso)
-        .in("estado", ["agendada", "confirmada"])
-        .order("fecha")
-        .limit(1)
-        .maybeSingle(),
-      supabase
-        .from("tests_aplicaciones")
-        .select("id, test_codigo, estado, asignado_at")
-        .eq("paciente_id", paciente.id)
-        .in("estado", ["pendiente", "en_curso"])
-        .order("asignado_at"),
-      supabase
-        .from("tareas_paciente")
-        .select("id, descripcion, estado")
-        .eq("paciente_id", paciente.id)
-        .neq("estado", "descartada")
-        .order("created_at", { ascending: false })
-        .limit(10),
-      supabase
-        .from("checkins_animo")
-        .select("valor")
-        .eq("paciente_id", paciente.id)
-        .eq("fecha", hoyFecha)
-        .maybeSingle(),
+      sql<
+        { id: string; fecha: string; tipo: string; meet_link: string | null }[]
+      >`
+        select id, fecha, tipo, meet_link from citas
+        where paciente_id = ${paciente.id}
+          and fecha >= now()
+          and estado in ('agendada', 'confirmada')
+        order by fecha
+        limit 1
+      `,
+      sql<{ id: string; test_codigo: string }[]>`
+        select id, test_codigo from tests_aplicaciones
+        where paciente_id = ${paciente.id}
+          and estado in ('pendiente', 'en_curso')
+        order by asignado_at
+      `,
+      sql<{ id: string; descripcion: string; estado: string }[]>`
+        select id, descripcion, estado from tareas_paciente
+        where paciente_id = ${paciente.id} and estado != 'descartada'
+        order by created_at desc
+        limit 10
+      `,
+      sql<{ valor: number }[]>`
+        select valor from checkins_animo
+        where paciente_id = ${paciente.id} and fecha = current_date
+      `,
     ]);
+
+  const proximaCita = proximasCitas[0];
+  const checkinHoy = checkinsHoy[0];
 
   return (
     <>
@@ -113,7 +111,7 @@ export default async function PortalPage({
 
       <Card>
         <Subtitulo>Mis tests</Subtitulo>
-        {testsPendientes?.length ? (
+        {testsPendientes.length ? (
           <ul className="mt-3 space-y-2">
             {testsPendientes.map((t) => (
               <li key={t.id} className="flex items-center justify-between">
@@ -136,7 +134,7 @@ export default async function PortalPage({
 
       <Card>
         <Subtitulo>Mis tareas</Subtitulo>
-        {tareas?.length ? (
+        {tareas.length ? (
           <ul className="mt-3 space-y-2">
             {tareas.map((t) => {
               const alternar = marcarTarea.bind(

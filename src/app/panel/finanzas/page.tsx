@@ -1,4 +1,4 @@
-import { supabaseServer } from "@/lib/supabase/server";
+import { sql } from "@/lib/db";
 import { getProfesional } from "@/lib/actions/helpers";
 import { registrarPago } from "@/lib/actions/pagos";
 import {
@@ -13,24 +13,39 @@ import {
 export const dynamic = "force-dynamic";
 
 export default async function FinanzasPage() {
-  await getProfesional();
-  const supabase = await supabaseServer();
+  const profesional = await getProfesional();
 
   const inicioMes = new Date();
   inicioMes.setDate(1);
   inicioMes.setHours(0, 0, 0, 0);
 
-  const { data: pagos } = await supabase
-    .from("pagos")
-    .select("id, monto, estado, metodo, conciliado_fintoc, pagado_at, created_at, citas(fecha, pacientes(nombre))")
-    .order("created_at", { ascending: false })
-    .limit(100);
+  const pagos = await sql<
+    {
+      id: string;
+      monto: number;
+      estado: string;
+      metodo: string | null;
+      conciliado_fintoc: boolean;
+      pagado_at: string | null;
+      cita_fecha: string;
+      paciente_nombre: string;
+    }[]
+  >`
+    select pg.id, pg.monto, pg.estado, pg.metodo, pg.conciliado_fintoc, pg.pagado_at,
+           c.fecha as cita_fecha, p.nombre as paciente_nombre
+    from pagos pg
+    join citas c on c.id = pg.cita_id
+    join pacientes p on p.id = c.paciente_id
+    where p.profesional_id = ${profesional.id}
+    order by pg.created_at desc
+    limit 100
+  `;
 
-  const pagados = (pagos ?? []).filter((p) => p.estado === "pagado");
+  const pagados = pagos.filter((p) => p.estado === "pagado");
   const ingresosMes = pagados
     .filter((p) => p.pagado_at && new Date(p.pagado_at) >= inicioMes)
     .reduce((acc, p) => acc + p.monto, 0);
-  const pendientes = (pagos ?? []).filter((p) =>
+  const pendientes = pagos.filter((p) =>
     ["pendiente", "parcial"].includes(p.estado)
   );
   const totalPendiente = pendientes.reduce((acc, p) => acc + p.monto, 0);
@@ -71,10 +86,6 @@ export default async function FinanzasPage() {
         {pagos?.length ? (
           <ul className="divide-y divide-border">
             {pagos.map((p) => {
-              const cita = p.citas as unknown as {
-                fecha: string;
-                pacientes: { nombre: string };
-              } | null;
               const pagar = registrarPago.bind(null, p.id);
               return (
                 <li
@@ -83,14 +94,11 @@ export default async function FinanzasPage() {
                 >
                   <div>
                     <p className="text-sm font-medium">
-                      {cita?.pacientes?.nombre ?? "—"} · $
-                      {p.monto.toLocaleString("es-CL")}
+                      {p.paciente_nombre} · ${p.monto.toLocaleString("es-CL")}
                     </p>
                     <p className="text-xs text-ink/50">
                       Sesión del{" "}
-                      {cita
-                        ? new Date(cita.fecha).toLocaleDateString("es-CL")
-                        : "—"}
+                      {new Date(p.cita_fecha).toLocaleDateString("es-CL")}
                       {p.conciliado_fintoc && " · conciliado (Fintoc)"}
                     </p>
                   </div>

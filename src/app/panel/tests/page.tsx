@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { supabaseServer } from "@/lib/supabase/server";
+import { sql } from "@/lib/db";
 import { getProfesional } from "@/lib/actions/helpers";
 import { asignarTest } from "@/lib/actions/tests";
 import { getTest, LISTA_TESTS } from "@/lib/tests";
@@ -22,18 +22,34 @@ export default async function TestsPage({
   searchParams: Promise<{ asignar?: string; paciente?: string }>;
 }) {
   const { asignar, paciente } = await searchParams;
-  await getProfesional();
-  const supabase = await supabaseServer();
+  const profesional = await getProfesional();
 
-  const [{ data: aplicaciones }, { data: pacientes }] = await Promise.all([
-    supabase
-      .from("tests_aplicaciones")
-      .select(
-        "id, test_codigo, estado, aplicado_via, puntaje_total, severidad, asignado_at, pacientes(nombre)"
-      )
-      .order("asignado_at", { ascending: false })
-      .limit(50),
-    supabase.from("pacientes").select("id, nombre").eq("estado", "activo").order("nombre"),
+  const [aplicaciones, pacientes] = await Promise.all([
+    sql<
+      {
+        id: string;
+        test_codigo: string;
+        estado: string;
+        aplicado_via: string;
+        puntaje_total: number | null;
+        severidad: string | null;
+        asignado_at: string;
+        paciente_nombre: string;
+      }[]
+    >`
+      select t.id, t.test_codigo, t.estado, t.aplicado_via, t.puntaje_total,
+             t.severidad, t.asignado_at, p.nombre as paciente_nombre
+      from tests_aplicaciones t
+      join pacientes p on p.id = t.paciente_id
+      where p.profesional_id = ${profesional.id}
+      order by t.asignado_at desc
+      limit 50
+    `,
+    sql<{ id: string; nombre: string }[]>`
+      select id, nombre from pacientes
+      where profesional_id = ${profesional.id} and estado = 'activo'
+      order by nombre
+    `,
   ]);
 
   return (
@@ -117,7 +133,7 @@ export default async function TestsPage({
                   <div>
                     <p className="text-sm font-medium">
                       {getTest(a.test_codigo)?.nombreCorto ?? a.test_codigo} ·{" "}
-                      {(a.pacientes as unknown as { nombre: string })?.nombre}
+                      {a.paciente_nombre}
                     </p>
                     <p className="text-xs text-ink/50">
                       {new Date(a.asignado_at).toLocaleDateString("es-CL")} ·{" "}

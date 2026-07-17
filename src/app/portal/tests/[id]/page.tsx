@@ -1,5 +1,5 @@
 import { notFound, redirect } from "next/navigation";
-import { supabaseServer } from "@/lib/supabase/server";
+import { sql } from "@/lib/db";
 import { getPacienteActual } from "@/lib/actions/helpers";
 import { responderTestComoPaciente } from "@/lib/actions/tests";
 import { getTest } from "@/lib/tests";
@@ -15,14 +15,14 @@ export default async function ResponderTestPage({
 }) {
   const { id } = await params;
   const paciente = await getPacienteActual();
-  const supabase = await supabaseServer();
 
-  const { data: aplicacion } = await supabase
-    .from("tests_aplicaciones")
-    .select("id, test_codigo, estado, paciente_id")
-    .eq("id", id)
-    .single();
-  if (!aplicacion || aplicacion.paciente_id !== paciente.id) notFound();
+  const [aplicacion] = await sql<
+    { id: string; test_codigo: string; estado: string }[]
+  >`
+    select id, test_codigo, estado from tests_aplicaciones
+    where id = ${id} and paciente_id = ${paciente.id}
+  `;
+  if (!aplicacion) notFound();
   if (!["pendiente", "en_curso"].includes(aplicacion.estado)) {
     redirect("/portal?test=respondido");
   }

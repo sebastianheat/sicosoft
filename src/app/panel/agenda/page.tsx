@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { supabaseServer } from "@/lib/supabase/server";
+import { sql } from "@/lib/db";
 import { getProfesional } from "@/lib/actions/helpers";
 import { cambiarEstadoCita, crearCita } from "@/lib/actions/citas";
 import { abrirSesion } from "@/lib/actions/sesiones";
@@ -22,23 +22,37 @@ export default async function AgendaPage({
   searchParams: Promise<{ nueva?: string; error?: string }>;
 }) {
   const { nueva, error } = await searchParams;
-  await getProfesional();
-  const supabase = await supabaseServer();
+  const profesional = await getProfesional();
 
-  const desde = new Date();
-  desde.setDate(desde.getDate() - 7);
-  const [{ data: citas }, { data: pacientes }] = await Promise.all([
-    supabase
-      .from("citas")
-      .select("id, fecha, duracion_min, estado, tipo, valor, meet_link, pacientes(id, nombre), sesiones(id)")
-      .gte("fecha", desde.toISOString())
-      .order("fecha")
-      .limit(50),
-    supabase
-      .from("pacientes")
-      .select("id, nombre")
-      .eq("estado", "activo")
-      .order("nombre"),
+  const [citas, pacientes] = await Promise.all([
+    sql<
+      {
+        id: string;
+        fecha: string;
+        duracion_min: number;
+        estado: string;
+        tipo: string;
+        valor: number;
+        meet_link: string | null;
+        paciente_nombre: string;
+        sesion_id: string | null;
+      }[]
+    >`
+      select c.id, c.fecha, c.duracion_min, c.estado, c.tipo, c.valor, c.meet_link,
+             p.nombre as paciente_nombre, s.id as sesion_id
+      from citas c
+      join pacientes p on p.id = c.paciente_id
+      left join sesiones s on s.cita_id = c.id
+      where p.profesional_id = ${profesional.id}
+        and c.fecha >= now() - interval '7 days'
+      order by c.fecha
+      limit 50
+    `,
+    sql<{ id: string; nombre: string }[]>`
+      select id, nombre from pacientes
+      where profesional_id = ${profesional.id} and estado = 'activo'
+      order by nombre
+    `,
   ]);
 
   return (
@@ -72,7 +86,7 @@ export default async function AgendaPage({
             <Campo label="Paciente">
               <select name="paciente_id" required className={inputClase}>
                 <option value="">Selecciona…</option>
-                {pacientes?.map((p) => (
+                {pacientes.map((p) => (
                   <option key={p.id} value={p.id}>
                     {p.nombre}
                   </option>
@@ -125,16 +139,10 @@ export default async function AgendaPage({
         </Card>
       )}
 
-      {citas?.length ? (
+      {citas.length ? (
         <Card className="p-0">
           <ul className="divide-y divide-border">
             {citas.map((c) => {
-              const paciente = c.pacientes as unknown as {
-                id: string;
-                nombre: string;
-              } | null;
-              const sesion = c.sesiones as unknown as { id: string }[] | { id: string } | null;
-              const tieneSesion = Array.isArray(sesion) ? sesion.length > 0 : !!sesion;
               const abrirConId = abrirSesion.bind(null, c.id);
               const marcarRealizada = cambiarEstadoCita.bind(null, c.id, "realizada");
               const marcarInasistencia = cambiarEstadoCita.bind(null, c.id, "inasistencia");
@@ -142,7 +150,7 @@ export default async function AgendaPage({
                 <li key={c.id} className="flex flex-wrap items-center justify-between gap-3 px-5 py-3">
                   <div>
                     <p className="text-sm font-medium">
-                      {paciente?.nombre}{" "}
+                      {c.paciente_nombre}{" "}
                       <span className="font-normal text-ink/50">· {c.tipo}</span>
                     </p>
                     <p className="text-xs text-ink/50">
@@ -194,7 +202,7 @@ export default async function AgendaPage({
                     )}
                     <form action={abrirConId}>
                       <button className="rounded border border-primary px-2 py-1 text-xs text-primary hover:bg-accent-soft/30">
-                        {tieneSesion ? "Ver sesión" : "Abrir sesión"}
+                        {c.sesion_id ? "Ver sesión" : "Abrir sesión"}
                       </button>
                     </form>
                   </div>
