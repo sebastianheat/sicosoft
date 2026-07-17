@@ -1,0 +1,39 @@
+@import "tailwindcss";
+
+/*
+ * Tokens de diseño oficiales — PRD §7
+ * Paleta azul desaturada: calma clínica y profesionalismo.
+ */
+:root {
+  --primary: #5b8a9c;
+  --primary-light: #7fa5b5;
+  --accent-soft: #a8c5d1;
+  --ink: #22333c;
+  --paper: #f6f9fa;
+  --success: #4e8a6c;
+  --warning: #c9963f;
+  --danger: #b05454;
+  --surface: #ffffff;
+  --border: #dde7ec;
+}
+
+@theme inline {
+  --color-primary: var(--primary);
+  --color-primary-light: var(--primary-light);
+  --color-accent-soft: var(--accent-soft);
+  --color-ink: var(--ink);
+  --color-paper: var(--paper);
+  --color-success: var(--success);
+  --color-warning: var(--warning);
+  --color-danger: var(--danger);
+  --color-surface: var(--surface);
+  --color-border: var(--border);
+  --font-sans: var(--font-geist-sans);
+  --font-mono: var(--font-geist-mono);
+}
+
+body {
+  background: var(--paper);
+  color: var(--ink);
+  font-family: var(--font-sans), ui-sans-serif, system-ui, sans-serif;
+}
