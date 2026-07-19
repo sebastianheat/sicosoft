@@ -10,8 +10,10 @@ import postgres from "postgres";
 
 const url = process.env.DATABASE_URL;
 if (!url) {
-  console.error("Falta DATABASE_URL");
-  process.exit(1);
+  // En el build de Vercel la variable existe (integración Neon); en un
+  // build local sin base configurada, seguimos sin migrar.
+  console.warn("DATABASE_URL no configurada — se omiten las migraciones.");
+  process.exit(0);
 }
 
 const local = url.includes("localhost") || url.includes("127.0.0.1");
